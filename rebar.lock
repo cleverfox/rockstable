@@ -1,0 +1,8 @@
+{"1.1.0",
+[{<<"rocksdb">>,{pkg,<<"rocksdb">>,<<"1.5.1">>},0},
+ {<<"sext">>,{pkg,<<"sext">>,<<"1.4.1">>},0}]}.
+[
+{pkg_hash,[
+ {<<"rocksdb">>, <<"016861FBFB1F76EC2C48F745FCA1F6E140FC0F27ADC8C389C4CABCE4A79B5F2F">>},
+ {<<"sext">>, <<"14559B219FAF11F9EBA7A350DFFC69C966C668439C54947A42D67167002798C4">>}]}
+].
