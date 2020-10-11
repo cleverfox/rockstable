@@ -2,55 +2,10 @@
 -author("cleverfox <devel@viruzzz.org>").
 -create_date("2020-10-04").
 
--export([table/1,tables/0]).
--export([etsget1/2]).
 -export([open_db/3, close_db/1]).
--export([put/2,get/2,get/3,del/2]).
-
--compile({no_auto_import,[get/2]}).
-
--record (test1, {
-           field1,
-           field2,
-           field3
-          }).
-
--record (test2, {
-           fieldA,
-           fieldB,
-           fieldC
-          }).
-
-table(test1) ->
-  {
-   test1,
-   record_info(fields,test1),
-   field1,
-   [field2, field3],
-   fun() -> ok end
-  };
-
-table(test2) ->
-  {
-   test2,
-   record_info(fields,test2),
-   [fieldA, fieldC],
-   [fieldB, [fieldB, fieldC]],
-   undefined
-  };
-
-table(justkv) ->
-  {
-   justkv,
-   [key,value],
-   [key],
-   [],
-   undefined
-  }.
-
-tables() ->
-  [ table(T) || T<- [test1, test2, justkv] ].
-
+-export([put/3,get/3,get/4,del/3]).
+-export([tx_new/1, tx_commit/1]).
+-export([backup/2,restore/2]).
 
 -define (encode(X), term_to_binary(X)).
 -define (decode(X), binary_to_term(X)).
@@ -64,13 +19,41 @@ open_db(Alias, Path, Tablespec) ->
 close_db(Alias) ->
   gen_server:call(rockstable_srv,{close_db, Alias}).
 
-put(Alias, Record) ->
+backup(Alias, BackupDB) ->
+  Matched=ets:match_object(rockstable,{{Alias,dbh},'_'}),
+  case Matched of
+    [{{Alias,dbh}, Handler}] ->
+      {ok, Bck1} = rocksdb:open_backup_engine(BackupDB),
+      ok=rocksdb:create_new_backup(Bck1, Handler),
+      ok=rocksdb:close_backup_engine(Bck1);
+    [] ->
+      throw('no_alias')
+  end.
+
+restore(BackupDB, DBPath) ->
+  {ok, Bck1} = rocksdb:open_backup_engine(BackupDB),
+  rocksdb:restore_db_from_latest_backup(Bck1, DBPath),
+  ok=rocksdb:close_backup_engine(Bck1).
+
+tx_new(Alias) ->
+  Matched=ets:match_object(rockstable,{{Alias,dbh},'_'}),
+  case Matched of
+    [{{Alias,dbh}, Handler}] ->
+      rocksdb:transaction(Handler,[]);
+    [] ->
+      throw('no_alias')
+  end.
+
+tx_commit(Txn) ->
+  ok = rocksdb:transaction_commit(Txn).
+
+put(Alias, Txn, Record) ->
   Table=element(1,Record),
   PriKey=mk_pri_key(Alias, Table, Record),
   Key=?encode(PriKey),
   NewIndexes=mk_idx(Alias, Table, Record),
-  {Db,CF}=rockstable:etsget1({Alias,{Table,{handler,table}}},no_table_handler),
-  {IdxDel,IdxAdd}=case rocksdb:get(Db,CF, Key, []) of
+  {Db,CF}=etsget1({Alias,{Table,{handler,table}}},no_table_handler),
+  {IdxDel,IdxAdd}=case iget(Db, Txn,CF, Key) of
                     not_found ->
                       {[],NewIndexes};
 
@@ -79,59 +62,59 @@ put(Alias, Record) ->
                       OldIndexes=mk_idx(Alias, Table, OldObject),
                       {
                        OldIndexes--NewIndexes,
-                       NewIndexes--OldIndexes,
+                       NewIndexes--OldIndexes
                       }
                   end,
-  ok=rocksdb:put(Db, CF, Key, ?encode(Record), []),
-  del_index(Alias, Table, IdxDel, PriKey),
-  put_index(Alias, Table, IdxAdd, PriKey),
+  ok=iput(Db, Txn, CF, Key, ?encode(Record)),
+  del_index(Alias, Txn, Table, IdxDel, PriKey),
+  put_index(Alias, Txn, Table, IdxAdd, PriKey),
   { IdxDel, IdxAdd }.
 
-get(Alias, Pattern) ->
-  get(Alias, Pattern, []).
+get(Alias, Txn, Pattern) ->
+  get(Alias, Txn, Pattern, []).
 
-get(Alias, Pattern, Opts) ->
+get(Alias, Txn, Pattern, Opts) ->
   Table=element(1,Pattern),
-  {Db,CF}=rockstable:etsget1({Alias,{Table,{handler,table}}},no_table_handler),
+  {Db,CF}=etsget1({Alias,{Table,{handler,table}}},no_table_handler),
   PriKey=mk_pri_key(Alias, Table, Pattern),
   case rockstable_internal:is_tuple_usable_idx(PriKey) of
-    true -> get_pk({Db, CF}, PriKey);
+    true -> get_pk(Db, Txn, CF, PriKey);
     false ->
       case lists:keyfind(use_index,1,Opts) of
         {use_index, Index} ->
           IndexKey=mk_n_idx(Alias, Table, Index, Pattern),
           io:format("Force idx ~p: ~p~n",[Index, mk_n_idx(Alias, Table, Index, Pattern)]),
-          get_by_index(Alias, Table, Index, IndexKey, Pattern);
+          get_by_index(Alias, Txn, Table, Index, IndexKey, Pattern);
         false ->
           Indexes=rockstable_internal:usable_indices(mk_idx(Alias, Table, Pattern)),
           io:format("Indexes ~p~n",[Indexes]),
           case Indexes of
             [] ->
-              get_ss({Db, CF}, Pattern);
+              get_ss(Db, Txn, CF, Pattern);
             [{Fields,IndexKey}|_] ->
               io:format("Idx ~p: ~p~n",[Fields, mk_n_idx(Alias, Table, Fields, Pattern)]),
-              get_by_index(Alias, Table, Fields, IndexKey, Pattern)
+              get_by_index(Alias, Txn, Table, Fields, IndexKey, Pattern)
           end
       end
   end.
 
-del(Alias, Pattern) ->
+del(Alias, Txn, Pattern) ->
   Table=element(1,Pattern),
-  {Db,CF}=rockstable:etsget1({Alias,{Table,{handler,table}}},no_table_handler),
+  {Db,CF}=etsget1({Alias,{Table,{handler,table}}},no_table_handler),
   PriKey=mk_pri_key(Alias, Table, Pattern),
   case rockstable_internal:is_tuple_usable_idx(PriKey) of
     false ->
       throw('no_primary_key_in_pattern');
     true ->
       Key=?encode(PriKey),
-      case rocksdb:get(Db,CF, Key, []) of
+      case iget(Db, Txn,CF, Key) of
         not_found ->
           not_found;
         {ok, BinRecord} ->
           Record=?decode(BinRecord),
           Indexes=mk_idx(Alias, Table, Record),
-          del_index(Alias, Table, Indexes, PriKey),
-          rocksdb:delete(Db,CF,Key,[])
+          del_index(Alias, Txn, Table, Indexes, PriKey),
+          idelete(Db, Txn,CF,Key)
       end
   end.
 
@@ -139,31 +122,31 @@ del(Alias, Pattern) ->
 %%% --- [ internal functions ] ---
 %%% 
 
-del_index(Alias, Table, IdxData, PriK) ->
+del_index(Alias, Txn, Table, IdxData, PriK) ->
   lists:map(
     fun({IdxID, Data}) ->
         {Db,ICF}=etsget1({Alias,{Table,{handler, {index,IdxID}}}},
                    'no_index_handler'),
         Key={Data, PriK},
         io:format("del Idx ~p~n",[Key]),
-        ok=rocksdb:delete(Db, ICF, ?idxenc(Key), [])
+        ok=idelete(Db, Txn, ICF, ?idxenc(Key))
     end, IdxData).
 
 mk_n_idx(Alias, Table, Index, Pattern) ->
   Fields=etsget1({Alias,{Table,{index,Index}}}, 'no_index'),
   mk_idxN(Fields, Pattern).
 
-get_by_index(Alias, Table, Fields, IndexKey, Pattern) ->
+get_by_index(Alias, Txn, Table, Fields, IndexKey, Pattern) ->
   {Db,ICF}=etsget1({Alias,{Table,{handler, {index,Fields}}}},
                    'no_index_handler'),
-  {ok, Itr} = rocksdb:iterator(Db, ICF, []),
+  {ok, Itr} = iitr(Db, Txn, ICF),
   try
     get_idx_itr({seek, ?idxmatcher({IndexKey,'_'})},
                 Itr,
                 IndexKey,
                 fun(E,A) ->
-                    {Db,CF}=rockstable:etsget1({Alias,{Table,{handler,table}}},no_table_handler),
-                    {ok, BinRecord}=rocksdb:get(Db,CF, ?encode(E), []),
+                    {Db,CF}=etsget1({Alias,{Table,{handler,table}}},no_table_handler),
+                    {ok, BinRecord}=iget(Db, Txn,CF, ?encode(E)),
                     GotRecord=?decode(BinRecord),
                     case is_record_match(Pattern, GotRecord) of
                       true ->
@@ -176,17 +159,17 @@ get_by_index(Alias, Table, Fields, IndexKey, Pattern) ->
     rocksdb:iterator_close(Itr)
   end.
 
-get_pk({Db, CF}, PriKey) ->
-  case rocksdb:get(Db,CF, ?encode(PriKey), []) of
+get_pk(Db, Txn, CF, PriKey) ->
+  case iget(Db, Txn,CF, ?encode(PriKey)) of
     not_found -> not_found;
     {ok, BinRecord} ->
       GotRecord=?decode(BinRecord),
       [GotRecord]
   end.
 
-get_ss({Db, TableCF}, Pattern) ->
+get_ss(Db, Txn, TableCF, Pattern) ->
   io:format("Sequence scan~n"),
-  {ok, Itr} = rocksdb:iterator(Db, TableCF, []),
+  {ok, Itr} = iitr(Db, Txn, TableCF),
   try
     get_tab_itr(first,
                 Itr,
@@ -248,14 +231,14 @@ get_idx_itr(Action, Itr, IndexKey, Fun, ExtraData) ->
       end
   end.
 
-put_index(Alias, Table, IdxData, PriK) ->
+put_index(Alias, Txn, Table, IdxData, PriK) ->
   lists:map(
     fun({IdxID, Data}) ->
         {Db,CF}=etsget1({Alias,{Table,{handler, {index,IdxID}}}},
                            'no_index_handler'),
         Key={Data, PriK},
         io:format("Idx ~p~n",[Key]),
-        ok=rocksdb:put(Db, CF, ?idxenc(Key), <<>>, [])
+        ok=iput(Db, Txn, CF, ?idxenc(Key), <<>>)
     end, IdxData).
 
 mk_pri_key(Alias, Table, Record) ->
@@ -298,4 +281,24 @@ mk_idx_key(Index0, Record) when is_list(Index0) ->
     lists:seq(1,size(Index))
    ).
 
+idelete(Db, undefined, CF, Key) ->
+  rocksdb:delete(Db, CF, Key, []);
+idelete(_, Txn, CF, Key) ->
+  rocksdb:transaction_delete(Txn,CF, Key).
+
+
+iget(Db, undefined, CF, Key) ->
+  rocksdb:get(Db, CF, Key, []);
+iget(_, Txn, CF, Key) ->
+  rocksdb:transaction_get(Txn,CF, Key).
+
+iput(Db, undefined, CF, Key, Val) ->
+  rocksdb:put(Db, CF, Key, Val, []);
+iput(_, Txn, CF, Key, Val) ->
+  rocksdb:transaction_put(Txn, CF, Key, Val).
+
+iitr(Db, undefined, CF) ->
+  rocksdb:iterator(Db, CF, []);
+iitr(Db, Txn, CF) ->
+  rocksdb:transaction_iterator(Db, Txn, CF, []).
 

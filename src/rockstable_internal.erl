@@ -12,7 +12,7 @@ open_db(Path, Cols) ->
              catch _:_ ->
                      ["default"]
              end,
-  {ok, Db, Handles} = rocksdb:open(Path,
+  {ok, Db, Handles} = rocksdb:open_optimistic_transaction_db(Path,
                                     [{create_if_missing, true}],
                                     [ {CN, []} || CN <- ExistsCols ]
                                    ),
