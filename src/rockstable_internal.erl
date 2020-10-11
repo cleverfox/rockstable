@@ -3,6 +3,7 @@
 -create_date("2020-10-08").
 
 -export([open_db/2, table_cols/1, table_prik_idx/1, table_index_idx/1]).
+-export([usable_indices/1, is_tuple_usable_idx/1]).
 
 open_db(Path, Cols) ->
   ExistsCols=try
@@ -100,4 +101,65 @@ table_index_idx({_Name, RI, _PriK, Idx, _Init}) ->
 %             [ {F, maps:get(F, Fields)} || F <- Fs ]
 %         end, Idx),
 %  {RI, PriK1, Idx1, Init}.
-%
+
+is_tuple_usable_idx2({'_',_}) -> false;
+is_tuple_usable_idx2({_,'_'}) -> false;
+is_tuple_usable_idx2(_) -> true.
+
+is_tuple_usable_idx3({'_',_,_}) -> false;
+is_tuple_usable_idx3({_,'_',_}) -> false;
+is_tuple_usable_idx3({_,_,'_'}) -> false;
+is_tuple_usable_idx3(_) -> true.
+
+is_tuple_usable_idx4({'_',_,_,_}) -> false;
+is_tuple_usable_idx4({_,'_',_,_}) -> false;
+is_tuple_usable_idx4({_,_,'_',_}) -> false;
+is_tuple_usable_idx4({_,_,_,'_'}) -> false;
+is_tuple_usable_idx4(_) -> true.
+
+is_tuple_usable_idx5({'_',_,_,_,_}) -> false;
+is_tuple_usable_idx5({_,'_',_,_,_}) -> false;
+is_tuple_usable_idx5({_,_,'_',_,_}) -> false;
+is_tuple_usable_idx5({_,_,_,'_',_}) -> false;
+is_tuple_usable_idx5({_,_,_,_,'_'}) -> false;
+is_tuple_usable_idx5(_) -> true.
+
+is_tuple_usable_idx6({'_',_,_,_,_,_}) -> false;
+is_tuple_usable_idx6({_,'_',_,_,_,_}) -> false;
+is_tuple_usable_idx6({_,_,'_',_,_,_}) -> false;
+is_tuple_usable_idx6({_,_,_,'_',_,_}) -> false;
+is_tuple_usable_idx6({_,_,_,_,'_',_}) -> false;
+is_tuple_usable_idx6({_,_,_,_,_,'_'}) -> false;
+is_tuple_usable_idx6(_) -> true.
+
+is_tuple_usable_idx({_,_}=Tuple) -> is_tuple_usable_idx2(Tuple);
+is_tuple_usable_idx({_,_,_}=Tuple) -> is_tuple_usable_idx3(Tuple);
+is_tuple_usable_idx({_,_,_,_}=Tuple) -> is_tuple_usable_idx4(Tuple);
+is_tuple_usable_idx({_,_,_,_,_}=Tuple) -> is_tuple_usable_idx5(Tuple);
+is_tuple_usable_idx({_,_,_,_,_,_}=Tuple) -> is_tuple_usable_idx6(Tuple);
+
+is_tuple_usable_idx(Tuple) ->
+  is_tuple_usable_idx_list(tuple_to_list(Tuple)).
+
+is_tuple_usable_idx_list([]) -> true;
+is_tuple_usable_idx_list(['_'|_]) -> false;
+is_tuple_usable_idx_list([_|Rest]) -> is_tuple_usable_idx_list(Rest).
+
+usable_indices([]) ->
+  [];
+
+usable_indices([{IndexName, Idx}|Rest]) ->
+  if Idx == '_' ->
+       usable_indices(Rest);
+     is_tuple(Idx) ->
+       case is_tuple_usable_idx(Idx) of
+         true ->
+           [{IndexName, Idx}|usable_indices(Rest)];
+         false ->
+           usable_indices(Rest)
+       end;
+     true ->
+       [{IndexName, Idx}|usable_indices(Rest)]
+  end.
+
+
