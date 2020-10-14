@@ -6,6 +6,7 @@
 -export([put/3,get/3,get/4,del/3]).
 -export([tx_new/1, tx_commit/1]).
 -export([backup/2,restore/2]).
+-export([transaction/2]).
 
 -define (encode(X), term_to_binary(X)).
 -define (decode(X), binary_to_term(X)).
@@ -18,6 +19,20 @@ open_db(Alias, Path, Tablespec) ->
 
 close_db(Alias) ->
   gen_server:call(rockstable_srv,{close_db, Alias}).
+
+transaction(Alias, Fun) ->
+  {ok, Ref} = tx_new(Alias),
+  try
+    put(rockstable_txn,Ref),
+    Res=Fun(),
+    tx_commit(Ref),
+    put(rockstable_txn,undefined),
+    {atomic, Res}
+  catch Ec:Ee ->
+          {aborted,{Ec,Ee}}
+  end.
+
+
 
 backup(Alias, BackupDB) ->
   Matched=ets:match_object(rockstable,{{Alias,dbh},'_'}),
@@ -283,22 +298,38 @@ mk_idx_key(Index0, Record) when is_list(Index0) ->
 
 idelete(Db, undefined, CF, Key) ->
   rocksdb:delete(Db, CF, Key, []);
-idelete(_, Txn, CF, Key) ->
+idelete(_, env, CF, Key) ->
+  Txn=erlang:get(rockstable_txn),
+  true=is_reference(Txn),
+  rocksdb:transaction_delete(Txn,CF, Key);
+idelete(_, Txn, CF, Key) when is_reference(Txn) ->
   rocksdb:transaction_delete(Txn,CF, Key).
 
 
 iget(Db, undefined, CF, Key) ->
   rocksdb:get(Db, CF, Key, []);
-iget(_, Txn, CF, Key) ->
+iget(_, env, CF, Key) ->
+  Txn=erlang:get(rockstable_txn),
+  true=is_reference(Txn),
+  rocksdb:transaction_get(Txn,CF, Key);
+iget(_, Txn, CF, Key) when is_reference(Txn) ->
   rocksdb:transaction_get(Txn,CF, Key).
 
 iput(Db, undefined, CF, Key, Val) ->
   rocksdb:put(Db, CF, Key, Val, []);
-iput(_, Txn, CF, Key, Val) ->
+iput(_, env, CF, Key, Val) ->
+  Txn=erlang:get(rockstable_txn),
+  true=is_reference(Txn),
+  rocksdb:transaction_put(Txn, CF, Key, Val);
+iput(_, Txn, CF, Key, Val) when is_reference(Txn) ->
   rocksdb:transaction_put(Txn, CF, Key, Val).
 
 iitr(Db, undefined, CF) ->
   rocksdb:iterator(Db, CF, []);
-iitr(Db, Txn, CF) ->
+iitr(Db, env, CF) ->
+  Txn=erlang:get(rockstable_txn),
+  true=is_reference(Txn),
+  rocksdb:transaction_iterator(Db, Txn, CF, []);
+iitr(Db, Txn, CF) when is_reference(Txn) ->
   rocksdb:transaction_iterator(Db, Txn, CF, []).
 
