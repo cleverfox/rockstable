@@ -43,11 +43,17 @@ handle_call({open_db, Alias, Path, Tablespec}, _From, #{table:=Tab}=State) ->
     [{{Alias, dbh}, _Db}] ->
       {reply, {error, alias_in_use}, State};
     [] ->
+      ExistsCols=try
+                   {ok,EC}=rocksdb:list_column_families(Path, []),
+                   EC
+                 catch _:_ -> []
+                 end,
       Cols= lists:foldl(
               fun(T, Acc) ->
                   Acc ++ rockstable_internal:table_cols(T)
               end, [], Tablespec),
       {ok, {Db, Handlers}} = rockstable_internal:open_db(Path, Cols),
+
 
       Data= lists:foldl(
               fun({TableName,Fields,PriKey, Indices,_}=CurTable, Acc) ->
@@ -72,6 +78,19 @@ handle_call({open_db, Alias, Path, Tablespec}, _From, #{table:=Tab}=State) ->
               end, [{{Alias, dbh}, Db}], Tablespec),
 
       ets:insert(Tab,Data),
+
+      lists:foreach(
+        fun({_Name, _Fields, _PriKey, _Indexes, InitFun}=T) ->
+            TCol=rockstable_internal:table_cols(T),
+            {table, Name} = lists:keyfind(table,1,TCol),
+            case lists:member(Name, ExistsCols) of
+              true -> ok;
+              false when is_function(InitFun) ->
+                InitFun();
+              false -> ok
+            end
+        end, Tablespec),
+
       {reply, ok, State}
   end;
 
