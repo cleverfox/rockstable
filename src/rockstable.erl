@@ -312,9 +312,9 @@ iget(Db, undefined, CF, Key) ->
 iget(_, env, CF, Key) ->
   Txn=erlang:get(rockstable_txn),
   true=is_reference(Txn),
-  rocksdb:transaction_get(Txn,CF, Key);
+  rocksdb:transaction_get(Txn,CF, Key, []);
 iget(_, Txn, CF, Key) when is_reference(Txn) ->
-  rocksdb:transaction_get(Txn,CF, Key).
+  rocksdb:transaction_get(Txn,CF, Key, []).
 
 iput(Db, undefined, CF, Key, Val) ->
   rocksdb:put(Db, CF, Key, Val, []);

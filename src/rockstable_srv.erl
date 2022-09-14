@@ -114,7 +114,7 @@ handle_cast(_Msg, State) ->
   {noreply, State}.
 
 handle_info(_Info, State) ->
-  logger:notice("Unknown info  ~p",[_Info]),
+  logger:notice("~s Unknown info ~p", [?MODULE,_Info]),
   {noreply, State}.
 
 terminate(_Reason, _State) ->
