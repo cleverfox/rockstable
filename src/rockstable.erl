@@ -100,16 +100,31 @@ get(Alias, Txn, Pattern, Opts) ->
         {use_index, Index} ->
           IndexKey=mk_n_idx(Alias, Table, Index, Pattern),
 %          io:format("Force idx ~p: ~p~n",[Index, mk_n_idx(Alias, Table, Index, Pattern)]),
-          get_by_index(Alias, Txn, Table, Index, IndexKey, Pattern);
+          case lists:keyfind(pred,1,Opts) of
+            {pred, Pred} ->
+              get_by_index(Alias, Txn, Table, Index, IndexKey, {Pattern,Pred});
+            false ->
+              get_by_index(Alias, Txn, Table, Index, IndexKey, Pattern)
+          end;
         false ->
           Indexes=rockstable_internal:usable_indices(mk_idx(Alias, Table, Pattern)),
 %          io:format("Indexes ~p~n",[Indexes]),
           case Indexes of
             [] ->
-              get_ss(Db, Txn, CF, Pattern);
+              case lists:keyfind(pred,1,Opts) of
+                {pred, Pred} ->
+                  get_ss(Db, Txn, CF, {Pattern,Pred});
+                false ->
+                  get_ss(Db, Txn, CF, Pattern)
+              end;
             [{Fields,IndexKey}|_] ->
 %              io:format("Idx ~p: ~p~n",[Fields, mk_n_idx(Alias, Table, Fields, Pattern)]),
-              get_by_index(Alias, Txn, Table, Fields, IndexKey, Pattern)
+              case lists:keyfind(pred,1,Opts) of
+                {pred, Pred} ->
+                  get_by_index(Alias, Txn, Table, Fields, IndexKey, {Pattern,Pred} );
+                false ->
+                  get_by_index(Alias, Txn, Table, Fields, IndexKey, Pattern)
+              end
           end
       end
   end.
@@ -184,7 +199,6 @@ get_pk(Db, Txn, CF, PriKey) ->
   end.
 
 get_ss(Db, Txn, TableCF, Pattern) ->
-%  io:format("Sequence scan~n"),
   {ok, Itr} = iitr(Db, Txn, TableCF),
   try
     get_tab_itr(first,
@@ -201,9 +215,16 @@ get_ss(Db, Txn, TableCF, Pattern) ->
     rocksdb:iterator_close(Itr)
   end.
 
+is_record_match({Pattern,Fun}, Record) when is_function(Fun,1) ->
+  R=match_record(Pattern, Record, 1, size(Pattern)),
+  if R ->
+       Fun(Record);
+     true ->
+       false
+  end;
+
 is_record_match(Pattern, Record) ->
   R=match_record(Pattern, Record, 1, size(Pattern)),
-%  io:format("Match ~p with ~p ~p~n",[Pattern, Record, R]),
   R.
 
 match_record(_Pattern, _Record, Field, End) when Field>End ->
