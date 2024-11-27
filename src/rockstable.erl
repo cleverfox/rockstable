@@ -28,7 +28,11 @@ transaction(Alias, Fun) ->
     tx_commit(Ref),
     put(rockstable_txn,undefined),
     {atomic, Res}
-  catch Ec:Ee ->
+  catch error:Ee:S ->
+		  logger:error("transaction aborted with error ~p at ~p",[Ee,S]),
+          put(rockstable_txn,undefined),
+		  {aborted,{error,Ee}};
+		Ec:Ee ->
           put(rockstable_txn,undefined),
           {aborted,{Ec,Ee}}
   end.
