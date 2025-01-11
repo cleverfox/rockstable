@@ -15,7 +15,7 @@
 -define (idxmatcher(X), sext:prefix(X)).
 
 open_db(Alias, Path, Tablespec) ->
-  gen_server:call(rockstable_srv,{open_db, Alias, Path, Tablespec}).
+  gen_server:call(rockstable_srv,{open_db, Alias, Path, Tablespec}, 15000).
 
 close_db(Alias) ->
   gen_server:call(rockstable_srv,{close_db, Alias}).
